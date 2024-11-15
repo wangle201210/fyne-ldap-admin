@@ -2,7 +2,11 @@ module github.com/wangle201210/fyne-ldap-admin
 
 go 1.23.0
 
-require fyne.io/fyne/v2 v2.5.2
+require (
+	fyne.io/fyne/v2 v2.5.2
+	github.com/go-ldap/ldap/v3 v3.4.8
+	github.com/google/martian v2.1.0+incompatible
+)
 
 require (
 	fyne.io/systray v1.11.0 // indirect
@@ -17,7 +21,6 @@ require (
 	github.com/go-asn1-ber/asn1-ber v1.5.5 // indirect
 	github.com/go-gl/gl v0.0.0-20211210172815-726fda9656d6 // indirect
 	github.com/go-gl/glfw/v3.3/glfw v0.0.0-20240506104042-037f3cc74f2a // indirect
-	github.com/go-ldap/ldap/v3 v3.4.8 // indirect
 	github.com/go-text/render v0.2.0 // indirect
 	github.com/go-text/typesetting v0.2.0 // indirect
 	github.com/godbus/dbus/v5 v5.1.0 // indirect
