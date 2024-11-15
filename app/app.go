@@ -32,6 +32,8 @@ type search struct {
 	searchReq           *dao.SearchReq
 	pageControl         *ldap.ControlPaging
 	conn                *ldap.Conn
+	data                []*ldap.Entry // 搜索到的结果
+	selectData          *ldap.Entry   // 需要被显示的data
 }
 
 func NewApp(app fyne.App) *LdapAdmin {
@@ -175,23 +177,6 @@ func (x *LdapAdmin) doSearch(isFirst bool) {
 		x.result.Add(widget.NewLabel(fmt.Sprintf("Search failed: %v", err)))
 		return
 	}
-	// 显示结果
-	result := fmt.Sprintf("Total: %d\n\n", len(entries))
-	for _, entry := range entries {
-		result += fmt.Sprintf("dn: %s\n", entry.DN)
-		for _, e := range entry.Attributes {
-			result += fmt.Sprintf("%s: %s\n", e.Name, e.Values)
-		}
-		result += "\n"
-	}
-	fmt.Printf("%s\n", result)
-	size := fyne.Size{Width: 400, Height: 400}
-	resultLabel := container.NewVBox(widget.NewLabel(result))
-	// 搜索按钮
-	nextButton := widget.NewButton("下一页", x.SearchNextPage)
-	scroll := container.NewScroll(resultLabel)
-	scroll.SetMinSize(size)
-	x.result.Add(nextButton)
-	x.result.Add(scroll)
-	x.result.Refresh()
+	x.data = entries
+	x.ResultShow()
 }
