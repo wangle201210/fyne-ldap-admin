@@ -12,16 +12,21 @@ import (
 	"github.com/wangle201210/fyne-ldap-admin/app/dao"
 	"github.com/wangle201210/fyne-ldap-admin/config"
 	"sync"
+	"time"
 )
 
 type LdapAdmin struct {
-	app fyne.App
+	fyne.App
 	sync.Mutex
-	windows  fyne.Window
-	payTable fyne.Window
-	history  fyne.Window
-	labels   [][]*canvas.Text
-	wg       *sync.WaitGroup
+	windows       fyne.Window
+	resultWindow  fyne.Window
+	resultContent fyne.CanvasObject
+	statusLabel   *widget.Label
+	currentList   *widget.List
+	labels        [][]*canvas.Text
+	wg            *sync.WaitGroup
+	ldapPool      *dao.LDAPPool
+	detailContent *widget.TextGrid
 	search
 }
 
@@ -38,17 +43,49 @@ type search struct {
 
 func NewApp(app fyne.App) *LdapAdmin {
 	res := &LdapAdmin{
-		app:     app,
+		App:     app,
 		windows: app.NewWindow(config.AppID),
 	}
-
+	res.App.Settings().BuildType()
 	res.initConfig()
-	app.Lifecycle().SetOnStopped(func() {
-		res.ldapConn.Save() // 退出时保存数据
+
+	// Initialize LDAP connection pool
+	server, _ := res.ldapConn.Addr.Get()
+	port, _ := res.ldapConn.Port.Get()
+	username, _ := res.ldapConn.Username.Get()
+	password, _ := res.ldapConn.Password.Get()
+	
+	pool, err := dao.NewLDAPPool(&dao.LDAPConfig{
+		Server:   server,
+		Port:     port,
+		Username: username,
+		Password: password,
+		PoolSize: 5,
+		Timeout:  30 * time.Second,
 	})
+	
+	if err != nil {
+		log.Errorf("Failed to create LDAP pool: %v", err)
+	} else {
+		res.ldapPool = pool
+	}
+
+	app.Lifecycle().SetOnStopped(func() {
+		res.ldapConn.Save() // Save data on exit
+		if res.ldapPool != nil {
+			// Close all connections in pool
+			for i := 0; i < 5; i++ {
+				if conn, err := res.ldapPool.GetConnection(); err == nil {
+					conn.Close()
+				}
+			}
+		}
+	})
+
 	res.searchReq = dao.NewSearchReq()
 	res.result = container.NewVBox()
-	// 布局
+	
+	// Layout
 	content := container.NewVBox(
 		res.MainPanel(),
 	)
@@ -57,7 +94,11 @@ func NewApp(app fyne.App) *LdapAdmin {
 	return res
 }
 
-// initConfigPanel 配置面板
+func (x *LdapAdmin) initConfig() {
+	x.ldapConn = config.InitLdapCon()
+	x.initConfigPanel()
+}
+
 func (x *LdapAdmin) initConfigPanel() {
 	serverEntry := widget.NewEntryWithData(x.ldapConn.Addr)
 	serverEntry.SetPlaceHolder("LDAP Server Address")
@@ -88,7 +129,6 @@ func (x *LdapAdmin) initConfigPanel() {
 	x.configAccordionItem = configAccordionItem
 }
 
-// MainPanel 主面板
 func (x *LdapAdmin) MainPanel() *fyne.Container {
 
 	baseDNEntry := widget.NewEntryWithData(x.searchReq.BaseDN)
@@ -106,22 +146,21 @@ func (x *LdapAdmin) MainPanel() *fyne.Container {
 		baseDNEntry,
 		filterEntry,
 		searchButton,
-		x.result,
+		// x.result,
 	)
 	return content
 }
 
-func (x *LdapAdmin) initConfig() {
-	x.ldapConn = config.InitLdapCon()
-	x.initConfigPanel()
-}
-
-func (x *LdapAdmin) Run() {
-	x.windows.Resize(fyne.NewSize(400, 400))
-	x.windows.ShowAndRun()
-}
-
 func (x *LdapAdmin) GetConn() (conn *ldap.Conn) {
+	if x.ldapPool != nil {
+		conn, err := x.ldapPool.GetConnection()
+		if err == nil {
+			return conn
+		}
+		log.Errorf("Failed to get connection from pool: %v", err)
+	}
+	
+	// Fallback to direct connection
 	if x.conn != nil {
 		return x.conn
 	}
@@ -156,27 +195,56 @@ func (x *LdapAdmin) doSearch(isFirst bool) {
 	x.configAccordionItem.Open = false
 	x.windows.Content().Refresh()
 	x.result.RemoveAll()
+
 	ldapConn := x.GetConn()
-	// defer ldapConn.Close()
+	if ldapConn == nil {
+		x.result.Add(widget.NewLabel("Failed to establish LDAP connection"))
+		return
+	}
+	
+	defer func() {
+		if x.ldapPool != nil {
+			x.ldapPool.ReleaseConnection(ldapConn)
+		}
+	}()
+
 	baseDN, _ := x.searchReq.BaseDN.Get()
 	filter, _ := x.searchReq.Filter.Get()
 	limit, _ := x.ldapConn.Limit.Get()
 	if limit == 0 || limit > 100 {
 		limit = 1000
 	}
+	
 	if isFirst {
 		x.search.pageControl = ldap.NewControlPaging(uint32(limit))
 	}
+	
 	if x.search.pageControl == nil {
-		x.result.Add(widget.NewLabel("没有下一页了"))
+		x.result.Add(widget.NewLabel("No more pages available"))
 		return
 	}
-	entries, err := dao.Search(ldapConn, baseDN, filter, x.search.pageControl)
+
+	// Define attributes to retrieve
+	attributes := []string{
+		"cn", "sn", "givenName",
+		"mail", "telephoneNumber",
+		"uid", "uidNumber", "gidNumber",
+		"o", "ou", "title",
+		"objectClass", "createTimestamp", "modifyTimestamp",
+	}
+
+	entries, err := dao.Search(ldapConn, baseDN, filter, x.search.pageControl, attributes)
 	if err != nil {
 		log.Errorf("Search failed: %v", err)
 		x.result.Add(widget.NewLabel(fmt.Sprintf("Search failed: %v", err)))
 		return
 	}
+
 	x.data = entries
 	x.ResultShow()
+}
+
+func (x *LdapAdmin) Run() {
+	x.windows.Resize(fyne.NewSize(800, 800))
+	x.windows.ShowAndRun()
 }

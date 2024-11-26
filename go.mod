@@ -9,6 +9,7 @@ require (
 )
 
 require (
+	fyne.io/fyne v1.4.3 // indirect
 	fyne.io/systray v1.11.0 // indirect
 	github.com/Azure/go-ntlmssp v0.0.0-20221128193559-754e69321358 // indirect
 	github.com/BurntSushi/toml v1.4.0 // indirect
